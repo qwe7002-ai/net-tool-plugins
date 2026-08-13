@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate marketplace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate marketplace manifest
+        run: |
+          python3 -m json.tool .agents/plugins/marketplace.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          marketplace = json.loads(
+              Path(".agents/plugins/marketplace.json").read_text()
+          )
+
+          assert marketplace["name"] == "net-tool-plugins"
+          assert marketplace["interface"]["displayName"] == "Network Tool Plugins"
+
+          entries = {entry["name"]: entry for entry in marketplace["plugins"]}
+          ssh = entries["ssh-mcp"]
+          assert ssh["source"] == {
+              "source": "url",
+              "url": "https://github.com/qwe7002-ai/ssh-mcp.git",
+              "ref": "main",
+          }
+          assert ssh["policy"] == {
+              "installation": "AVAILABLE",
+              "authentication": "ON_INSTALL",
+          }
+          assert ssh["category"] == "Engineering"
+          PY
