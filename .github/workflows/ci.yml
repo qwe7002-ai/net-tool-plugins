@@ -42,4 +42,16 @@ jobs:
               "authentication": "ON_INSTALL",
           }
           assert ssh["category"] == "Engineering"
+
+          mikrotik = entries["mikrotik-mcp"]
+          assert mikrotik["source"] == {
+              "source": "url",
+              "url": "https://github.com/qwe7002-ai/mikrotik-mcp.git",
+              "ref": "main",
+          }
+          assert mikrotik["policy"] == {
+              "installation": "AVAILABLE",
+              "authentication": "ON_INSTALL",
+          }
+          assert mikrotik["category"] == "Engineering"
           PY
