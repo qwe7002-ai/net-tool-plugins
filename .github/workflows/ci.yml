@@ -54,4 +54,16 @@ jobs:
               "authentication": "ON_INSTALL",
           }
           assert mikrotik["category"] == "Engineering"
+
+          tplink = entries["tplink-easy-smart-switch-mcp"]
+          assert tplink["source"] == {
+              "source": "url",
+              "url": "https://github.com/qwe7002-ai/tplink-easy-smart-switch-mcp.git",
+              "ref": "master",
+          }
+          assert tplink["policy"] == {
+              "installation": "AVAILABLE",
+              "authentication": "ON_INSTALL",
+          }
+          assert tplink["category"] == "Engineering"
           PY
