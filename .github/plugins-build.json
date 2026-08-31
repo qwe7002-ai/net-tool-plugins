@@ -1,0 +1,27 @@
+{
+  "$comment": "Build recipes for the plugins listed in .agents/plugins/marketplace.json. The marketplace manifest stays the single source of truth for each plugin's upstream URL and ref; this file only says how to turn that checkout into a binary. Keys under \"plugins\" must match the marketplace plugin names exactly (CI asserts this).",
+  "platforms": [
+    { "id": "linux-x64", "goos": "linux", "goarch": "amd64", "bun": "bun-linux-x64", "ext": "" },
+    { "id": "linux-arm64", "goos": "linux", "goarch": "arm64", "bun": "bun-linux-arm64", "ext": "" },
+    { "id": "darwin-x64", "goos": "darwin", "goarch": "amd64", "bun": "bun-darwin-x64", "ext": "" },
+    { "id": "darwin-arm64", "goos": "darwin", "goarch": "arm64", "bun": "bun-darwin-arm64", "ext": "" },
+    { "id": "win32-x64", "goos": "windows", "goarch": "amd64", "bun": "bun-windows-x64", "ext": ".exe" }
+  ],
+  "plugins": {
+    "ssh-mcp": {
+      "kind": "go",
+      "package": "./cmd/ssh-mcp",
+      "binary": "ssh-mcp"
+    },
+    "mikrotik-mcp": {
+      "kind": "go",
+      "package": "./cmd/mikrotik-mcp",
+      "binary": "mikrotik-mcp"
+    },
+    "tplink-easy-smart-switch-mcp": {
+      "kind": "bun",
+      "entry": "./src/index.ts",
+      "binary": "tplink-easy-smart-switch-mcp"
+    }
+  }
+}

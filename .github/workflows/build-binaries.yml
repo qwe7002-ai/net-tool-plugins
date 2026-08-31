@@ -1,0 +1,169 @@
+name: Build MCP binaries
+
+# Cross-compiles every plugin listed in .agents/plugins/marketplace.json from its
+# pinned upstream ref and publishes the binaries as a release on this repository.
+# The bootstrap shipped with each plugin (see bootstrap/bootstrap.mjs) downloads
+# from that release at MCP server startup, so end users need no Go or Bun.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (default: binaries-<UTC date>-<run number>)"
+        required: false
+        type: string
+  push:
+    branches: ["main"]
+    paths:
+      - ".agents/plugins/marketplace.json"
+      - ".github/plugins-build.json"
+      - ".github/workflows/build-binaries.yml"
+      - "bootstrap/bootstrap.mjs"
+  schedule:
+    # Weekly, deliberately off the hour: upstream refs are branches, so a
+    # scheduled rebuild keeps the published binaries close to their heads.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-binaries
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Resolve upstream refs
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      resolved: ${{ steps.plan.outputs.resolved }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve plugins, platforms and upstream commits
+        id: plan
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/plan-build.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Show plan
+        env:
+          RESOLVED: ${{ steps.plan.outputs.resolved }}
+        run: |
+          printf '%s' "$RESOLVED" | python3 -m json.tool
+
+  build:
+    name: ${{ matrix.plugin }} (${{ matrix.platform }})
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout ${{ matrix.plugin }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.commit }}
+          path: src
+
+      - name: Set up Go
+        if: matrix.kind == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+
+      - name: Set up Bun
+        if: matrix.kind == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build (Go)
+        if: matrix.kind == 'go'
+        working-directory: src
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          ASSET: ${{ matrix.asset }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/dist/$ASSET" "$PACKAGE"
+
+      - name: Build (Bun)
+        if: matrix.kind == 'bun'
+        working-directory: src
+        env:
+          ASSET: ${{ matrix.asset }}
+          ENTRY: ${{ matrix.entry }}
+          BUN_TARGET: ${{ matrix.bun }}
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          bun build "$ENTRY" --compile --target="$BUN_TARGET" --outfile "$GITHUB_WORKSPACE/dist/$ASSET"
+
+      - name: Verify the binary is not empty
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          test -s "dist/$ASSET"
+          ls -l "dist/$ASSET"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build manifest and checksums
+        env:
+          RESOLVED: ${{ needs.plan.outputs.resolved }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cd ..
+          node .github/scripts/write-manifest.mjs
+          python3 -m json.tool dist/manifest.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          name: ${{ needs.plan.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/*
+          make_latest: "true"

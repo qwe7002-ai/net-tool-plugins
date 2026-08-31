@@ -67,3 +67,96 @@ jobs:
           }
           assert tplink["category"] == "Engineering"
           PY
+
+      - name: Validate build recipes against the marketplace
+        run: |
+          python3 -m json.tool .github/plugins-build.json >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          marketplace = json.loads(
+              Path(".agents/plugins/marketplace.json").read_text()
+          )
+          recipes = json.loads(Path(".github/plugins-build.json").read_text())
+
+          listed = {entry["name"] for entry in marketplace["plugins"]}
+          buildable = set(recipes["plugins"])
+          assert listed == buildable, (
+              "every marketplace plugin needs a build recipe and vice versa; "
+              f"marketplace-only={sorted(listed - buildable)} "
+              f"recipe-only={sorted(buildable - listed)}"
+          )
+
+          # bootstrap.mjs resolves assets by "<process.platform>-<process.arch>",
+          # so an id has to be Node's spelling of the Go pair it is built from,
+          # or a host will look for an asset name nothing ever published.
+          node_os = {"linux": "linux", "darwin": "darwin", "windows": "win32"}
+          node_arch = {"amd64": "x64", "arm64": "arm64"}
+          for platform in recipes["platforms"]:
+              expected = (
+                  f"{node_os[platform['goos']]}-{node_arch[platform['goarch']]}"
+              )
+              assert platform["id"] == expected, (
+                  f"platform id {platform['id']!r} does not match "
+                  f"{platform['goos']}/{platform['goarch']} (expected {expected!r})"
+              )
+              # Bun keeps the OS name Go uses, but Node's arch name.
+              assert platform["bun"] == (
+                  f"bun-{platform['goos']}-{node_arch[platform['goarch']]}"
+              ), platform["id"]
+              assert platform["ext"] == (".exe" if platform["goos"] == "windows" else "")
+          ids = [platform["id"] for platform in recipes["platforms"]]
+          assert len(ids) == len(set(ids)), f"duplicate platform ids: {ids}"
+          assert {"linux-x64", "win32-x64"} <= set(ids)
+
+          for name, recipe in recipes["plugins"].items():
+              assert recipe["kind"] in {"go", "bun"}, name
+              assert recipe["binary"], name
+              key = "package" if recipe["kind"] == "go" else "entry"
+              assert recipe.get(key), f"{name} needs a {key}"
+          PY
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check workflow scripts parse
+        run: |
+          node --check .github/scripts/plan-build.mjs
+          node --check .github/scripts/write-manifest.mjs
+          node --check bootstrap/bootstrap.mjs
+          node --check bootstrap/test/asset-server.mjs
+          node --check bootstrap/test/bootstrap.test.mjs
+
+      - name: Validate workflow YAML
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          import yaml
+          from pathlib import Path
+
+          for path in sorted(Path(".github/workflows").glob("*.yml")):
+              yaml.safe_load(path.read_text())
+              print(f"ok {path}")
+          PY
+
+  bootstrap:
+    name: Bootstrap tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run bootstrap tests
+        run: node bootstrap/test/bootstrap.test.mjs
